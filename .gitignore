@@ -145,3 +145,6 @@ dmypy.json
 outputs/
 
 .idea/
+
+stream_dino_sam2/build/
+stream_dino_sam2/devel/

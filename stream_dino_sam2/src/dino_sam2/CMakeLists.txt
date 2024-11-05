@@ -51,6 +51,8 @@ find_package(catkin REQUIRED COMPONENTS
 add_message_files(
   FILES
   object_info.msg
+  BboxList.msg
+  LabelList.msg
 )
 
 ## Generate services in the 'srv' folder

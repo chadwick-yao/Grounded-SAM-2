@@ -36,6 +36,26 @@ pip install git+https://github.com/huggingface/transformers
 
 ![pipeline](./1000089746.jpg)
 
+# Nov. 5
+
+- DINO + SAM2 Video Stream Tracking $\rightarrow$ DINO + SAM2 Image-based Segmentation
+
+    - Image-based SAM2 relates to number of selected objects, but not too much
+    - The upper limit depends on DINO
+
+- Test the new pipeline with real env data.
+- SAM2 has prediction_batch.
+
+2 Mug tracking:
+[INFO] [1730774478.126161]: DINO frequency: 7.972143226919332 Hz
+[INFO] [1730774478.241277]: SAM2 frequency: 10.107925760034648 Hz
+6 Pen tracking:
+[INFO] [1730774661.782984]: DINO frequency: 7.855825861604983 Hz
+[INFO] [1730774661.900735]: SAM2 frequency: 9.637204172284916 Hz
+
+![alt text](image-1.png)
+
+![alt text](image.png)
+
 TODO:
-- [x] It stills has problem when trying to run SAM2 in ROS.
 - [ ] Video Stream Delay.

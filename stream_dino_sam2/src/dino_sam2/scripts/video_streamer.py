@@ -5,21 +5,34 @@ from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 import cv2
 from std_msgs.msg import Header
+from message_filters import ApproximateTimeSynchronizer, Subscriber
+from dino_sam2.msg import LabelList, BboxList
+import numpy as np
+
+import supervision as sv
+from supervision.draw.color import ColorPalette
 
 
 class VideoStreamer:
     def __init__(self):
         rospy.init_node("video_streamer", anonymous=True)
         self.image_pub = rospy.Publisher("/camera/image_bgr", Image, queue_size=10)
-        self.image_pub_copy = rospy.Publisher(
-            "/camera/image_bgr_copy",
-            Image,
+        # subscriber
+        label_sub = Subscriber("/label_list", LabelList)
+        bbox_sub = Subscriber("/bbox_list", BboxList)
+        mask_sub = Subscriber("/camera/mask", Image)
+        self.sub_ts = ApproximateTimeSynchronizer(
+            [label_sub, bbox_sub, mask_sub],
             queue_size=10,
+            slop=0.05,
         )
-        self.mask_sub = rospy.Subscriber("/camera/mask_bgr", Image, self.callback)
+        self.sub_ts.registerCallback(self.callback)
 
         self.bridge = CvBridge()
-        self._mask = None
+        self.img_shape = None
+        self.labels = None
+        self.bboxes = None
+        self.masks = None
 
         self.camera_index = self.find_camera()
         if self.camera_index is None:
@@ -35,7 +48,9 @@ class VideoStreamer:
         index = 0
         while True:
             cap = cv2.VideoCapture(index)
-            if cap.read()[0]:
+            ret, frame = cap.read()
+            if ret:
+                self.img_shape = frame.shape
                 cap.release()
                 return index
             cap.release()
@@ -44,8 +59,27 @@ class VideoStreamer:
                 rospy.logerr("No camera found")
                 return None
 
-    def callback(self, mask_msg):
-        self._mask = self.bridge.imgmsg_to_cv2(mask_msg, desired_encoding="bgr8")
+    def callback(
+        self,
+        label_msg,
+        bbox_msg,
+        mask_msg,
+    ):
+        labels = label_msg.data
+        num = len(labels)
+
+        bboxes = bbox_msg.data
+        bboxes = np.array(bboxes, dtype=np.float32).reshape(-1, 4)
+
+        combined_mask = self.bridge.imgmsg_to_cv2(mask_msg, desired_encoding="mono8")
+        height = self.img_shape[0]
+        masks = np.array(
+            [combined_mask[i * height : (i + 1) * height, :] for i in range(num)]
+        )
+
+        self.labels = labels
+        self.bboxes = bboxes
+        self.masks = masks
 
     def run(self):
         while not rospy.is_shutdown():
@@ -62,12 +96,37 @@ class VideoStreamer:
             image_msg.header = header
 
             self.image_pub.publish(image_msg)
-            self.image_pub_copy.publish(image_msg)
 
-            if self._mask is not None:
-                frame = cv2.addWeighted(frame, 1, self._mask, 0.5, 0)
+            if (
+                self.labels is not None
+                and self.bboxes is not None
+                and self.masks is not None
+            ):
+                detections = sv.Detections(
+                    xyxy=self.bboxes,  # (n, 4)
+                    mask=self.masks.astype(bool),  # (n, h, w)
+                    class_id=np.array(list(range(len(self.labels)))),
+                )
 
-            cv2.imshow("Camera", frame)
+                box_annotator = sv.BoxAnnotator(color=ColorPalette.DEFAULT)
+                annotated_frame = box_annotator.annotate(
+                    scene=frame.copy(), detections=detections
+                )
+
+                label_annotator = sv.LabelAnnotator(color=ColorPalette.DEFAULT)
+                annotated_frame = label_annotator.annotate(
+                    scene=annotated_frame, detections=detections, labels=self.labels
+                )
+
+                mask_annotator = sv.MaskAnnotator(color=ColorPalette.DEFAULT)
+                annotated_frame = mask_annotator.annotate(
+                    scene=annotated_frame, detections=detections
+                )
+
+                cv2.imshow("Camera", annotated_frame)
+            else:
+                cv2.imshow("Camera", frame)
+
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
 

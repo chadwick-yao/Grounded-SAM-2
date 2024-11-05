@@ -1,7 +1,8 @@
 import rospy
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
-from dino_sam2.msg import object_info
+from std_msgs.msg import Header
+from dino_sam2.msg import object_info, LabelList, BboxList
 from message_filters import ApproximateTimeSynchronizer, Subscriber
 
 import torch
@@ -13,6 +14,7 @@ import numpy as np
 from collections import defaultdict
 
 from sam2.sam2_camera_predictor import SAM2CameraPredictor
+from sam2.sam2_image_predictor import SAM2ImagePredictor
 from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
 
 
@@ -20,37 +22,30 @@ class ProduceMask:
     def __init__(
         self,
         device,
-        dino_checkpoint: str = "IDEA-Research/grounding-dino-tiny",
-        sam2_checkpoint: str = "facebook/sam2-hiera-small",
+        dino_checkpoint: str = "IDEA-Research/grounding-dino-base",
+        sam2_checkpoint: str = "facebook/sam2-hiera-large",
     ):
         rospy.init_node("produce_mask", anonymous=True)
 
-        # subscriber for grounding dino
-        img_sub = Subscriber("/camera/image_bgr", Image)
-        obj_info_sub = Subscriber("/object_info", object_info)
-        self.sub_ts = ApproximateTimeSynchronizer(
-            [img_sub, obj_info_sub],
-            queue_size=10,
-            slop=0.05,
+        # subscriber
+        self.obj_info_sub = rospy.Subscriber(
+            "/object_info",
+            object_info,
+            self.callback_update_obj_set,
         )
-        self.sub_ts.registerCallback(self.callback_update_bbox)
-
-        # subscriber for sam2
-        self.camera_sub = rospy.Subscriber(
-            "/camera/image_bgr_copy",
+        self.img_sub = rospy.Subscriber(
+            "/camera/image_bgr",
             Image,
             self.callback_produce_mask,
         )
 
         # publisher for mask
-        self.mask_pub = rospy.Publisher("/camera/mask_bgr", Image, queue_size=10)
+        self.label_pub = rospy.Publisher("/label_list", LabelList, queue_size=10)
+        self.bbox_pub = rospy.Publisher("/bbox_list", BboxList, queue_size=10)
+        self.mask_pub = rospy.Publisher("/camera/mask", Image, queue_size=10)
 
         self.bridge = CvBridge()
-        self.object_list = set()
-        self.object_bbox = dict()
-        self.inference_state = {}
-        self.if_init = False
-        self.frame_idx = 0
+        self.object_set = set()
 
         # load model
         self.device = device
@@ -60,131 +55,84 @@ class ProduceMask:
             dino_checkpoint
         ).to(self.device)
 
-        self.mask_predictor: SAM2CameraPredictor = SAM2CameraPredictor.from_pretrained(
+        self.mask_predictor: SAM2CameraPredictor = SAM2ImagePredictor.from_pretrained(
             sam2_checkpoint,
             device=self.device,
         )
 
         rospy.loginfo("Model loaded")
 
-    def callback_update_bbox(self, img_msg, obj_info_msg):
+    def callback_update_obj_set(self, obj_info_msg):
         if obj_info_msg.mode == 0:
-            self.object_list.add(obj_info_msg.name)
+            self.object_set.add(obj_info_msg.name)
             rospy.loginfo(f"Added object: {obj_info_msg.name}")
         elif obj_info_msg.mode == 1:
-            self.object_list.discard(obj_info_msg.name)
+            self.object_set.discard(obj_info_msg.name)
             rospy.loginfo(f"Removed object: {obj_info_msg.name}")
         else:
             rospy.logwarn(f"Unknown mode: {obj_info_msg.mode}")
 
-        # update bbox
-        try:
-            frame = self.bridge.imgmsg_to_cv2(img_msg, "bgr8")
-            self.update_bbox_dict(frame)
-        except Exception as e:
-            rospy.logwarn(f"Erorr updating bbox: {str(e)}")
-
     def callback_produce_mask(self, img_msg):
-        if self.object_bbox:
+        if self.object_set:
+            start_time = rospy.Time.now()
+
             frame = self.bridge.imgmsg_to_cv2(img_msg, "bgr8")
-            width, height = frame.shape[:2][::-1]
+            image = PIL.Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
-            if not self.if_init:
-                self.inference_state = self.mask_predictor.load_first_frame(frame)
-                ann_frame_idx = 0
-                self.frame_idx = 0
+            text_prompt = ". ".join(self.object_set) + "."
 
-                obj_id = 0
-                for obj_idx, (label, boxes) in enumerate(self.object_bbox.items()):
-                    for idx in range(boxes.shape[0]):
-                        _, out_obj_idx, out_mask_logits = (
-                            self.mask_predictor.add_new_points_or_box(
-                                inference_state=self.inference_state,
-                                frame_idx=ann_frame_idx,
-                                obj_id=obj_id,
-                                box=boxes[idx],
-                            )
-                        )
-                        obj_id += 1
-                rospy.loginfo(f"Added bbox into mask predictor.")
-                self.if_init = True
-            else:
-                start_time = rospy.Time.now()
-                self.frame_idx += 1
-                _, out_obj_ids, out_mask_logits = (
-                    self.mask_predictor.track_camera_stream(
-                        img=frame,
-                        inference_state=self.inference_state,
-                        frame_idx=self.frame_idx,
-                    )
-                )
-                all_mask = np.zeros((height, width, 1), dtype=np.uint8)
-                # print(all_mask.shape)
-                for i in range(0, len(out_obj_ids)):
-                    out_mask = (out_mask_logits[i] > 0.0).permute(
-                        1, 2, 0
-                    ).cpu().numpy().astype(np.uint8) * 255
+            inputs = self.grounding_processor(
+                images=image,
+                text=text_prompt,
+                return_tensors="pt",
+            ).to(self.device)
 
-                    all_mask = cv2.bitwise_or(all_mask, out_mask)
-                all_mask = cv2.cvtColor(all_mask, cv2.COLOR_GRAY2BGR)
-                image_msg = self.bridge.cv2_to_imgmsg(all_mask, "bgr8")
+            with torch.no_grad():
+                outputs = self.grounding_model(**inputs)
 
-                rospy.loginfo(f"FPS: {1 / (rospy.Time.now() - start_time).to_sec()}")
+            results = self.grounding_processor.post_process_grounded_object_detection(
+                outputs,
+                inputs.input_ids,
+                box_threshold=0.5,
+                text_threshold=0.5,
+                target_sizes=[frame.shape[:2]],
+            )
 
-                self.mask_pub.publish(image_msg)
+            labels: list = results[0]["labels"]
+            input_boxes: torch.Tensor = results[0]["boxes"]
 
-    def update_bbox_dict(self, frame):
-        # combine all object names
-        text_prompt = ". ".join(self.object_list) + "."
-        image = PIL.Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            # sam2
+            self.mask_predictor.set_image(image)
 
-        inputs = self.grounding_processor(
-            images=image,
-            text=text_prompt,
-            return_tensors="pt",
-        ).to(self.device)
+            masks, _, _ = self.mask_predictor.predict(
+                point_coords=None,
+                point_labels=None,
+                box=input_boxes,
+                multimask_output=False,
+            )
 
-        with torch.no_grad():
-            outputs = self.grounding_model(**inputs)
+            header = Header()
+            header.stamp = rospy.Time.now()
+            # publish label list
+            label_list = LabelList()
+            label_list.data = labels
+            label_list.header = header
+            self.label_pub.publish(label_list)
 
-        results = self.grounding_processor.post_process_grounded_object_detection(
-            outputs,
-            inputs.input_ids,
-            box_threshold=0.6,
-            text_threshold=0.6,
-            target_sizes=[frame.shape[:2]],  # TODO: check this
-        )
-        """
-        Results is a list of dict with the following structure:
-        [
-            {
-                'scores': tensor([0.7969, 0.6469, 0.6002, 0.4220], device='cuda:0'), 
-                'labels': ['car', 'tire', 'tire', 'tire'], 
-                'boxes': tensor([[  89.3244,  278.6940, 1710.3505,  851.5143],
-                                [1392.4701,  554.4064, 1628.6133,  777.5872],
-                                [ 436.1182,  621.8940,  676.5255,  851.6897],
-                                [1236.0990,  688.3547, 1400.2427,  753.1256]], device='cuda:0')
-            }
-        ]
-        """
-        # save the results in the object_bbox dict
-        labels = results[0]["labels"]
-        boxes = results[0]["boxes"]
+            # publish bbox list
+            bbox_list = BboxList()
+            bbox_list.data = input_boxes.cpu().numpy().flatten().tolist()
+            bbox_list.header = header
+            self.bbox_pub.publish(bbox_list)
 
-        # clear object_bbox
-        self.object_bbox = dict()
-        grouped = defaultdict(list)
+            # publish mask
+            masks = masks.astype(np.uint8) * 255
+            combined_mask = np.vstack([masks[i, 0] for i in range(len(labels))])
+            mask_msg = self.bridge.cv2_to_imgmsg(combined_mask, "mono8")
+            mask_msg.header = header
+            self.mask_pub.publish(mask_msg)
 
-        for label, box in zip(labels, boxes):
-            grouped[label].append(box)
-
-        for label, box_list in grouped.items():
-            stacked_boxes = torch.stack(box_list, dim=0)
-            self.object_bbox[label] = stacked_boxes
-
-        if self.object_bbox:
-            rospy.loginfo(f"Updated bbox dict: {self.object_bbox}")
-            self.if_init = False
+            rospy.loginfo(f"Frequency: {1 / (rospy.Time.now() - start_time).to_sec()}")
 
     def run(self):
         rospy.spin()

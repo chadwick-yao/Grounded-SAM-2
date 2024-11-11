@@ -26,6 +26,21 @@ pip install -e .
 pip install --no-build-isolation -e grounding_dino
 
 pip install git+https://github.com/huggingface/transformers
+
+
+# install bytetracker
+cd byte_track
+pip install -e .
+
+git clone git@github.com:valentin-fngr/cython_bbox.git
+cd cython_bbox
+## before installing, change the source code first
+# in cython_bbox repo, in file src/cython_bbox.pyx change lines 12 and 13 to be:
+# DTYPE = np.float32
+# ctypedef np.float32_t DTYPE_t
+pip install -e .
+
+
 ```
 
 ## Oct. 10

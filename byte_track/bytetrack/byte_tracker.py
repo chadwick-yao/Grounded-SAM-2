@@ -12,6 +12,7 @@ class STrack(BaseTrack):
 
         # wait activate
         self._tlwh = np.asarray(tlwh, dtype=np.float32)
+        self.curr_bbox = self.tlwh_to_tlbr(self._tlwh)
         self.kalman_filter = None
         self.mean, self.covariance = None, None
         self.is_activated = False
@@ -72,6 +73,8 @@ class STrack(BaseTrack):
         self.score = new_track.score
         self.class_name = new_track.class_name
 
+        self.curr_bbox = new_track.curr_bbox
+
     def update(self, new_track, frame_id):
         """
         Update a matched track
@@ -92,6 +95,8 @@ class STrack(BaseTrack):
 
         self.score = new_track.score
         self.class_name = new_track.class_name
+
+        self.curr_bbox = new_track.curr_bbox
 
     @property
     # @jit(nopython=True)

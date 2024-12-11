@@ -1,10 +1,9 @@
 # dds cloudapi for Grounding DINO 1.5
 from dds_cloudapi_sdk import Config
 from dds_cloudapi_sdk import Client
-from dds_cloudapi_sdk import DetectionTask
+from dds_cloudapi_sdk.tasks.dinox import DinoxTask
+from dds_cloudapi_sdk.tasks.types import DetectionTarget
 from dds_cloudapi_sdk import TextPrompt
-from dds_cloudapi_sdk import DetectionModel
-from dds_cloudapi_sdk import DetectionTarget
 
 import os
 import cv2
@@ -27,20 +26,19 @@ TEXT_PROMPT = "car . building ."
 IMG_PATH = "notebooks/images/cars.jpg"
 SAM2_CHECKPOINT = "./checkpoints/sam2.1_hiera_large.pt"
 SAM2_MODEL_CONFIG = "configs/sam2.1/sam2.1_hiera_l.yaml"
-GROUNDING_MODEL = DetectionModel.GDino1_5_Pro # DetectionModel.GDino1_6_Pro
 BOX_THRESHOLD = 0.2
 WITH_SLICE_INFERENCE = False
 SLICE_WH = (480, 480)
 OVERLAP_RATIO = (0.2, 0.2)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-OUTPUT_DIR = Path("outputs/grounded_sam2_gd1.5_demo")
+OUTPUT_DIR = Path("outputs/grounded_sam2_dinox_demo")
 DUMP_JSON_RESULTS = True
 
 # create output directory
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 """
-Prompt Grounding DINO 1.5 with Text for Box Prompt Generation with Cloud API
+Prompt DINO-X with Text for Box Prompt Generation with Cloud API
 """
 # Step 1: initialize the config
 token = API_TOKEN
@@ -65,12 +63,11 @@ if WITH_SLICE_INFERENCE:
             temp_filename = tmpfile.name
         cv2.imwrite(temp_filename, image_slice)
         image_url = client.upload_file(temp_filename)
-        task = DetectionTask(
+        task = DinoxTask(
             image_url=image_url,
             prompts=[TextPrompt(text=TEXT_PROMPT)],
-            targets=[DetectionTarget.BBox],  # detect bbox
-            model=GROUNDING_MODEL,  # detect with GroundingDino-1.5-Pro model
-            bbox_threshold=BOX_THRESHOLD, # box confidence threshold
+            bbox_threshold=0.25,
+            targets=[DetectionTarget.BBox],
         )
         client.run_task(task)
         result = task.result
@@ -107,12 +104,11 @@ if WITH_SLICE_INFERENCE:
 else:
     image_url = client.upload_file(IMG_PATH)
 
-    task = DetectionTask(
+    task = DinoxTask(
         image_url=image_url,
         prompts=[TextPrompt(text=TEXT_PROMPT)],
-        targets=[DetectionTarget.BBox],  # detect bbox
-        model=GROUNDING_MODEL,  # detect with GroundingDINO-1.5-Pro model
-        bbox_threshold=BOX_THRESHOLD, # box confidence threshold
+        bbox_threshold=0.25,
+        targets=[DetectionTarget.BBox],
     )
 
     client.run_task(task)
@@ -200,11 +196,11 @@ annotated_frame = box_annotator.annotate(scene=img.copy(), detections=detections
 
 label_annotator = sv.LabelAnnotator()
 annotated_frame = label_annotator.annotate(scene=annotated_frame, detections=detections, labels=labels)
-cv2.imwrite(os.path.join(OUTPUT_DIR, "groundingdino_annotated_image.jpg"), annotated_frame)
+cv2.imwrite(os.path.join(OUTPUT_DIR, "dinox_annotated_image.jpg"), annotated_frame)
 
 mask_annotator = sv.MaskAnnotator()
 annotated_frame = mask_annotator.annotate(scene=annotated_frame, detections=detections)
-cv2.imwrite(os.path.join(OUTPUT_DIR, "grounded_sam2_annotated_image_with_mask.jpg"), annotated_frame)
+cv2.imwrite(os.path.join(OUTPUT_DIR, "dinox_sam2_annotated_image_with_mask.jpg"), annotated_frame)
 
 print(f'Annotated image has already been saved as to "{OUTPUT_DIR}"')
 
@@ -243,7 +239,7 @@ if DUMP_JSON_RESULTS:
         "img_height": image.height,
     }
     
-    with open(os.path.join(OUTPUT_DIR, "grounded_sam2_gd1.5_image_demo_results.json"), "w") as f:
+    with open(os.path.join(OUTPUT_DIR, "grounded_sam2_dinox_image_demo_results.json"), "w") as f:
         json.dump(results, f, indent=4)
 
     print(f'Annotation has already been saved to "{OUTPUT_DIR}"')

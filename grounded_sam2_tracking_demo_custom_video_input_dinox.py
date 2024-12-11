@@ -1,10 +1,9 @@
 # dds cloudapi for Grounding DINO 1.5
 from dds_cloudapi_sdk import Config
 from dds_cloudapi_sdk import Client
-from dds_cloudapi_sdk import DetectionTask
+from dds_cloudapi_sdk.tasks.dinox import DinoxTask
+from dds_cloudapi_sdk.tasks.types import DetectionTarget
 from dds_cloudapi_sdk import TextPrompt
-from dds_cloudapi_sdk import DetectionModel
-from dds_cloudapi_sdk import DetectionTarget
 
 import os
 import cv2
@@ -28,7 +27,7 @@ TEXT_PROMPT = "hippopotamus."
 OUTPUT_VIDEO_PATH = "./hippopotamus_tracking_demo.mp4"
 SOURCE_VIDEO_FRAME_DIR = "./custom_video_frames"
 SAVE_TRACKING_RESULTS_DIR = "./tracking_results"
-API_TOKEN_FOR_GD1_5 = "Your API token"
+API_TOKEN_FOR_DINOX = "Your API token"
 PROMPT_TYPE_FOR_VIDEO = "box" # choose from ["point", "box", "mask"]
 BOX_THRESHOLD = 0.2
 
@@ -86,7 +85,7 @@ inference_state = video_predictor.init_state(video_path=SOURCE_VIDEO_FRAME_DIR)
 
 ann_frame_idx = 0  # the frame index we interact with
 """
-Step 2: Prompt Grounding DINO 1.5 with Cloud API for box coordinates
+Step 2: Prompt DINO-X with Cloud API for box coordinates
 """
 
 # prompt grounding dino to get the box coordinates on specific frame
@@ -94,7 +93,7 @@ img_path = os.path.join(SOURCE_VIDEO_FRAME_DIR, frame_names[ann_frame_idx])
 image = Image.open(img_path)
 
 # Step 1: initialize the config
-config = Config(API_TOKEN_FOR_GD1_5)
+config = Config(API_TOKEN_FOR_DINOX)
 
 # Step 2: initialize the client
 client = Client(config)
@@ -104,12 +103,11 @@ client = Client(config)
 # if you are processing local image file, upload them to DDS server to get the image url
 image_url = client.upload_file(img_path)
 
-task = DetectionTask(
+task = DinoxTask(
     image_url=image_url,
     prompts=[TextPrompt(text=TEXT_PROMPT)],
-    targets=[DetectionTarget.BBox],  # detect bbox
-    model=DetectionModel.GDino1_6_Pro,  # detect with GroundingDino-1.5-Pro model
-    bbox_threshold=BOX_THRESHOLD,
+    bbox_threshold=0.25,
+    targets=[DetectionTarget.BBox],
 )
 
 client.run_task(task)

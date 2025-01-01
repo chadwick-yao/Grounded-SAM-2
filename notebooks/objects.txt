@@ -1,0 +1,16 @@
+chair
+table
+trashbin
+bed
+toilet
+guitar
+bicycle
+bag
+sofa
+refrigerator
+washbasin
+tv
+lamp
+microwave
+toaster
+coffee machine

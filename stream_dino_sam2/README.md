@@ -21,9 +21,9 @@ mamba install compilers cmake pkg-config make ninja colcon-common-extensions cat
 
 pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu124
 
-pip install -e .
+pip install -e grounding_dino
 
-pip install --no-build-isolation -e grounding_dino
+pip install -e .
 
 pip install git+https://github.com/huggingface/transformers
 

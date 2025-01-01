@@ -181,6 +181,9 @@ class BYTETracker(object):
             output_results = output_results.cpu().numpy()
             scores = output_results[:, 4] * output_results[:, 5]
             bboxes = output_results[:, :4]  # x1y1x2y2
+        
+        if not isinstance(class_names, np.ndarray):
+            class_names = np.array(class_names)
 
         remain_inds = scores > self.args.track_thresh
         inds_low = scores > 0.1
